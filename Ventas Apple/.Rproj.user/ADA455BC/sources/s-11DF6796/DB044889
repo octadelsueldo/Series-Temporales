@@ -1,0 +1,28 @@
+{
+    "id": "DB044889",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1605519854064.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "id": "81ffa94b59fb47e5b61bcde4eb5f9dbc",
+        "name": "fventas.ets",
+        "title": "fventas.ets",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 147,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1605519854064,
+    "read_only": false,
+    "read_only_alternatives": []
+}

@@ -1,0 +1,174 @@
+---
+title: "Pronóstico de Ventas - Apple"
+author: "Hugo César Octavio del Sueldo"
+date: "11/15/2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introducción
+
+El objetivo es predecir las ventas de **Apple**. Para ello, hemos acudido a *Bloomberg* y hemos obtenido los datos trimestrales desde el 2T de 2008 hasta el 3T del 2017. (IngresosApple.csv).
+
+![](/Users/octaviodelsueldo/Documents/CUNEF/Prediccion/Ventas Apple/foto1.png)
+
+En el gráfico adjunto se representan los ingresos desde el 1º trimestre del 2005 hasta el 3º del 2017.
+
+![](/Users/octaviodelsueldo/Documents/CUNEF/Prediccion/Ventas Apple/foto2.png)
+
+Se debe elegir el modelo ETS y el modelo ARIMA que mejor predice las ventas, habiendo dejado fuera de la estimación los trimestres del 2017.
+
+Una vez seleccionado el modelo se estimara el modelo con todos los datos y se harán las predicciones del año 2017 y 2018.
+
+Para comprender mejor lo que esta ocurriendo con las ventas de Apple, el siguiente articulo apareció en el “Wall Street Journal” en el fin de semana del 23/24 de Septiembre de 2017 y los ingresos por segmentos.
+
+![](/Users/octaviodelsueldo/Documents/CUNEF/Prediccion/Ventas Apple/foto3.png)
+
+![](/Users/octaviodelsueldo/Documents/CUNEF/Prediccion/Ventas Apple/foto4.png)
+
+![](/Users/octaviodelsueldo/Documents/CUNEF/Prediccion/Ventas Apple/Saved Image 2020-11-11 at 11.27.31 a. m..png)
+
+```{r}
+require(forecast)
+require(xts)
+require(ggplot2)
+```
+
+```{r}
+# read data from CSV file
+rawData <- read.csv("IngresosApple.csv", sep=";", dec=",")
+
+#observamos los tipos de objetos dentro del fichero
+str(rawData)
+
+#cambiamos las fechas por fechas
+rawDate <- seq(as.Date("2008-04-01"), as.Date("2017-09-30"), by = "quarter")
+rawDate
+
+#Create a XTS object
+xVentas <- xts(rawData$Ingresos, order.by=rawDate)
+
+#Generate quarterly data
+xVentas <- to.quarterly(xVentas)
+
+
+#Transform to zoo data (forecast package)
+zVentas=as.zoo(xVentas$xVentas.Close)
+
+
+#Change name
+names(zVentas)="Ventas"
+```
+
+```{r}
+df_new <- data.frame(value = as.vector(zVentas),
+                     time = time(zVentas))
+ggplot(df_new) + 
+  geom_point(aes(x = time,y = value)) + 
+  geom_line(aes(x = time,y = value)) + 
+  ylab("Ventas") + 
+  ggtitle("Ventas Trimestrales de Apple") + 
+  xlab("Trimestres")
+```
+Tendencia: tiene tendencia positiva, parece ser aditiva damped y no tiene ciclo.
+Estacionalidad: Claramente existe componente estacional multiplicativo, como puede observarse en el primer trimestre de cada año.
+La serie es no estacionaria en varianza y en media.
+
+Seleccionamos el mejor modelo ETS de forma automatica
+
+```{r}
+#Select number of observation to compare forecast
+cOmit = 3 #sacamos los 3 trimestres de 2017
+
+#Data Size
+nObs = length(zVentas)
+
+#sub_sample
+#oVentas=zVentas[1:(nObs-cOmit),]
+oVentas <- window(zVentas,start = index(zVentas[1]),end = index(zVentas[nObs - cOmit]))
+
+#test
+pVentas <- window(zVentas,start = index(zVentas[nObs - cOmit+1]),end = index(zVentas[nObs]))
+
+## Select automatic ETS
+etsfit <- ets(oVentas)
+
+#Results
+summary(etsfit)
+```
+
+
+
+El modelo es de tipo M,A,M, es decir, de error multiplicativo, tendencia aditiva y componente estacional multiplicativo. 
+
+
+MODELOS ARIMA
+
+Estimamos el modelo ARIMA con la funcion autoarima sin marcar especificamente ningun valor de lambda para que el algoritmo encuentre el superparametro optimo para estimar el modelo.
+
+```{r}
+#ARIMA MODEL
+fit1=auto.arima(oVentas)
+summary(fit1)
+```
+
+
+Aqui observamos que obtenemos un modelo con menor MAPE (% de error medio cometido por la prediccion) que en el modelos ETS. 
+
+Obtenemos un modelo SARIMA, ARIMA con componente estacional ARIMA(1,0,0)(0,1,0)[4]. El componente principal tiene componente autorregresivo de 1 retardo. El componente estacional no tiene componente autoregresivo, y ademas requiere de una diferencia para hacer la serie estacionaria en media. Ninguno de los componentes depende de los errores que tuvieron lugar anteriormente. El [4] nos indica la cantidad de periodos anteriores (4 trimestres). 
+
+
+
+```{r}
+#residual analysis
+ggtsdisplay(fit1$residuals)
+```
+
+Como podemos observar prestando atencion a las bandas, los residuos se pueden calificar de ruido blanco.
+
+
+Realizaremos el test de Box-Ljung, que consiste en contrastar si los retardos de la acf son cero a la vez:
+
+```{r}
+#box-Ljung Test
+Box.test(fit1$residuals,lag=4, fitdf=3, type="Lj")
+```
+
+```{r}
+Box.test(fit1$residuals,lag=8, fitdf=3, type="Lj")
+```
+
+```{r}
+Box.test(fit1$residuals,lag=12, fitdf=3, type="Lj")
+```
+
+Al ser los p-valor en todos los Box test mayores al nivel de significacion de 5% podemos considerar que todos los residuos son ruido blanco.
+
+
+Ahora vamos a estimar y graficar esas predicciones con el modelo ARIMA ya que tiene menor error que el modelo ETS
+```{r}
+fventas.arima=forecast(fit1)
+
+ggplot(df_new)+geom_point(aes(x=time,y=value))+geom_line(aes(x=time,y=value))+ geom_forecast(fventas.arima,alpha=0.4)+ggtitle("ARIMA: Predicción Apple")
+```
+
+
+```{r}
+fventas.arima
+```
+
+
+En el grafico podemos observar que las predicciones no son precisas ya que ninguna coincide exactamente con los valores reales. Sin embargo, tenemos una aproximacion dentro de los intervalos de confianza del 85% y 95% ya que los valores reales caen dentro de estos intervalos. 
+
+# Conclusiones
+
+Analizando los valores de la serie desde 2008 hasta el tercer trimestre del 2017 podemos observar que hay una tendencia creciente fuerte hasta el primer trimestre del 2015 donde se empieza a achatar o a perder fuerza. El gran crecimiento desde 2008 e incluso 2007 fue por la revolucion e innovacion que produjo la creacion del iphone, un smartphone capaz de hacer cosas que ningun otro participante del mercado de celulares habia logrado antes. Ya en 2015 esta tendencia se empieza a achatar un poco debido a la entrada de nuevos competidores en el mercado que equipararon en funcionalidades a los iphone y ademas, con precios rompedores lo que llevo a los usuarios a elegir otras alternativas. Al mismo tiempo, el tiempo medio de mantencion de un smartphone cambio. Hoy en dia, los usuarios suelen mantener los celulares por mas tiempo llegando a 3 años de media en posesion.
+
+El gran desafio de Apple es dejar de depender tanto del iphone como fuente de ingresos ya que el 70% de sus ventas dependen de este producto lo que los hace muy sensibles a variaciones en las ventas del mismo. El desafio pasa por potenciar las ventas de otros productos como los servicios en la nube como Icloud, News, Homekits, Apple Arcade, Apple TV y lo que para mi es, hoy en dia, el producto estrella de la marca el apple Watch un reloj inteligente con muchas funcionalidades en lo que respecta a salud. Potenciar estos productos y servicios ayudara a continuar por el camino de la tendencia creciente que se veia mas pronunciado desde 2008 hasta el 2015.
+

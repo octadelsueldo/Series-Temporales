@@ -1,0 +1,8 @@
+"0","df_new <- data.frame(value = as.vector(zVentas),"
+"0","                     time = time(zVentas))"
+"0","ggplot(df_new) + "
+"0","  geom_point(aes(x = time,y = value)) + "
+"0","  geom_line(aes(x = time,y = value)) + "
+"0","  ylab(""Ventas"") + "
+"0","  ggtitle(""Ventas Trimestrales de Apple"") + "
+"0","  xlab(""Trimestres"")"

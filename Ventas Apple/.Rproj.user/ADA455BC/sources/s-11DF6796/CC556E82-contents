@@ -1,0 +1,269 @@
+---
+title: "GAM_PISA"
+author: "Hugo Cesar Octavio del Sueldo"
+date: "11/7/2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Caso Practico 03: Pruebas PISA
+
+The data set has been constructed using average Science scores by country from the Programme for International Student Assessment (PISA) 2006, along with GNI per capita (Purchasing Power Parity, 2005 dollars), Educational Index, Health Index, and Human Development Index from UN data. The key variables are as follows:
+
+El conjunto de datos se ha construido utilizando la puntuación media en Ciencias por país del Programa para la Evaluación Internacional de Estudiantes (PISA) 2006, junto con el GNI per cápita (paridad del poder adquisitivo, dólares de 2005), el índice educativo, el índice de salud y el índice de desarrollo humano de la ONU (HDI).
+
+## Diccionario de variables:
+
+- Overall Science Score (average score for 15 year olds)
+- Interest in science
+- Support for scientific inquiry
+- Income Index
+- Health Index
+- Education Index
+- Human Development Index (composed of the Income index, Health Index, and Education Index)
+
+El objetivo es modelizar la relación entre la puntuación media (OSS) y el resto de variables, utilizando modelos de splines y GAM. Se debe realizar CV cuando se pueda.
+
+Los datos se encuentran en el fichero `pisasci2006.csv`
+
+```{r Libraries, include = FALSE}
+library(here) # Comentarios [//]:
+library(tidyverse)
+library(janitor) # Limpieza de nombres
+library(skimr) # Summary lindo
+library(magrittr) #  %<>%
+library(corrplot) # Grafico de correlaciones
+library(ggcorrplot)  # Correlaciones con ggplot
+library(PerformanceAnalytics) # Otra correlación
+library(imputeTS) # na_mean() reemplaza nulos por la media
+library(broom) # Modelos en df
+library(flextable) # Tablas formateadas
+library(mgcv) # Estimaciones GAM
+library(reshape2) # Melt DF
+library(prettydoc)
+```
+
+## Cargamos los datos
+
+```{r load data, include = FALSE}
+pisa <- read_csv("pisasci2006.csv")
+```
+
+
+
+```{r}
+head(pisa)
+tail(pisa)
+```
+
+
+## Limpieza del dataset
+
+### Selección de variables
+
+Las variables clave son las siguientes:
+
+  - Overall Science Score (average score for 15 year olds)
+  - Interest in science
+  - Support for scientific inquiry
+  - Income Index
+  - Health Index
+  - Education Index
+  - Human Development Index (composed of the Income index, Health Index, and Education Index)
+  
+```{r}
+pisa %<>% select(Country, Overall, Interest, Support, Income, Health, Edu, HDI)
+```
+
+
+### Renombrar columnas
+
+Comenzaremos el data cleaning cambiando los nombres de las columnas a minusculas siguiendo con las buenas practicas de codigo
+
+```{r}
+
+pisa %<>% clean_names()   # # clean_names() nos modifica aquellos nombres que tienen simbolos que estan reservados para calculo o como palabras reservadas del codigo. 
+colnames(pisa)
+```
+
+Una vez tenemos los nombres de las variables en el formato correcto, pasamos al tratamiento de duplicados y de nulos
+
+### Data cleaning
+
+
+Vamos a chequear los duplicados y los nulos en el dataset.
+
+
+```{r}
+# Remove duplicate rows of the dataframe
+pisa %<>% distinct(country,.keep_all= TRUE)
+
+
+
+summarise_all(pisa, funs(sum(is.na(.)))) #cuentame los valores nulos en el dataset
+  
+
+```
+En esta ocasión tenemos un dataset pequeño con bastantes nulos, por lo que si eliminamos estos valores con `drop_na()` perderemos mucha informacion,por ello cambiaremos los nulos por un estadistico como la media.
+
+```{r}
+pisa <- na_mean(pisa) # Como existen muchos valores nulos los sustituimos por la media con la funcion na_mean() de la libreria imputeTS
+```
+
+Por lo tanto, ya tenemos nuestro dataset `pisa` limpio para poder explorarlo
+
+## Exploratory Data Analysis
+
+Vamos a realizar un breve chequeo de la distribucion y comportamiento de las variables. Voy a utilizar las funciones skim y chart.Correlation aprendidas en clases anteriores para conocer los principales estadisticos, histogramas, densidades, correlaciones, etc.
+
+### Estadisticos relevantes 
+
+```{r skim}
+skim(pisa)
+```
+
+### Correlaciones
+
+
+```{r chart.correlation, fig.height = 12, fig.width = 12, fig.align = "center"}
+chart.Correlation(pisa %>% 
+               select_at(vars(-country)),
+               histogram = TRUE, pch = 19)  #sacamos las variables categoricas de nuestra matriz de correlaciones
+```
+
+Vemos como existen ciertas correlaciones, como la del hdi con la educacion, health o income.
+
+
+## Splines suavizados
+
+### Teoría 
+
+- Son las splines de regresion, que se crean especificando un conjunto de nudos, produciendo una secuencia de funciones de base, y luego usando mínimos cuadrados para estimar los coeficientes de spline.
+
+- Suavizar splines es un enfoque diferente para crear una spline. Hay que encontrar una función que haga que el RSS sea razonablemente pequeño, pero que también sea fluido.
+
+- Una forma de hacerlo es utilizar un parámetro de ajuste lambda que penaliza la variabilidad en la función:
+
+- Si lambda = 0, el término de penalización no tiene ningún efecto, y la función estará turbia e interpolará cada valor.
+
+- Cuando lamba = infinito, la función será perfectamente suave, una línea recta (en realidad, una línea lineal de mínimos cuadrados).
+
+- Recurrimos a la validación cruzada para suavizar splines. Resulta que realmente podemos calcular LOOCV de manera muy eficiente para suavizar splines, splines de regresión y otras funciones básicas arbitrarias.
+  
+### Practica
+
+Como comentamos anteriormente, a traves de cross_validation vamos a conseguir los grados de libertad optimos de cada variable.
+
+`This is based on a leave one out crossvalidation approach. The strategy is to remove one data point at a time, fit a smoother to the remaining data, and then fit of the smoother against the entire data set. The goal is to pick the lambda(j) that minimizes the average error across all n validations.`
+
+```{r df_cv, warning = FALSE}
+attach(pisa)
+fit_interest <- smooth.spline(x = interest, y = overall, cv = TRUE) # fit de la variable interest
+fit_interest$df
+
+fit_support <- smooth.spline(x = support, y = overall, cv = TRUE) # fit de la variable support
+fit_support$df
+
+fit_income <- smooth.spline(x = income, y = overall, cv = TRUE) # fit de la variable income
+fit_income$df
+
+fit_health <- smooth.spline(x = health, y = overall, cv = TRUE) # fit de la variable health
+fit_health$df
+
+fit_edu <- smooth.spline(x = edu, y = overall, cv = TRUE) # fit de la variable health
+fit_edu$df
+
+fit_hdi <- smooth.spline(x = hdi, y = overall, cv = TRUE) # fit de la variable hdi
+fit_hdi$df
+```
+Una vez tenemos los resultados de los grados de libertad ideales para cada variable por CV:
+
+- Interest: 4.750171
+- Support: 2.001243
+- Income: 4.244952
+- Health: 2.002844
+- Edu: 2.002385
+- HDI: 8.603228
+
+Comprobaremos la diferencia de haber obtenido los grados de libertad por Cross-Validation a haberlos introducido manualmente al azar:
+
+```{r example of using the correct df, fig.height = 7, fig.width = 10, fig.align = "center"}
+# Para nuestro ejemplo elegimos la variable hdi:
+# Primero, generamos un smooth.spline con 18 grados de libertad (este número es al azar)
+fitdf18_hdi <- smooth.spline(x = hdi, y = overall, df = 18)
+  # Ploteamos ambos modelos para comparar
+plot(income, overall, col = 'black')
+  lines(fitdf18_hdi, col = 'red', lwd = 3)   # Plot del modelo con 18 grados de libertad
+  lines(fit_hdi, col = 'blue', lwd = 3)            # Plot del modelo con los grados de libertad por CV
+  legend('topleft', legend = c('18 DF', '8.60 DF'),   # Parametros de la leyenda
+       col = c('red', 'blue'), lty = 1, lwd = 3, cex = 1, bg = 'grey')
+```
+
+Como podemos observar, al establecer los grados de libertad de manera manual corremos el riesgo de sufrir overfitting o underfitting, así en la linea azul vemos como hay unas ondulaciones excesivas que no generalizan de manera adecuada, esto es producto de tener un elevado numero de grados de libertad, si por el contrario, reducimos los grados de libertad en exceso tenderemos a una línea recta, por lo que tendremos underfitting.
+
+```{r  comparison using the correct df, fig.height = 7, fig.width = 10, fig.align = "center"}
+fitdf4_hdi <- smooth.spline(x = hdi, y = overall, df = 4)
+  # Ploteamos ambos modelos para comparar
+plot(hdi, overall, col = 'black')
+  lines(fitdf4_hdi, col = 'red', lwd = 3)   # Plot del modelo con 4 grados de libertad
+  lines(fit_hdi, col = 'blue', lwd = 3)            # Plot del modelo con los grados de libertad por CV
+  legend('topleft', legend = c('4 DF', '8.60 DF'),   # Parámetros de la leyenda
+       col = c('red', 'blue'), lty = 1, lwd = 3, cex = 1, bg = 'grey')
+```
+
+
+## Modelos aditivos generalizados, GAM
+
+### Teoria 
+
+- Los splines se explican desde la perspectiva de adaptar un modelo a la respuesta Y con un único predictor X.
+
+- Exploramos el problema de la flexibilidad prediciendo Y sobre la base de varios predictores. Esta es nuevamente una extensión del modelo lineal simple.
+
+- Los modelos GAM proporcionan un marco general para extender el modelo lineal al permitir funciones no lineales de cada variable, mientras se mantiene la capacidad de adición.
+
+### Practica
+
+```{r first gam model, fig.height = 10, fig.width = 10, fig.align = "center", warning=FALSE}
+modelogam1 <- gam(overall ~ s(interest, k = 4.750171) + s(support, k = 2.001243) + s(income, k = 4.244952) + s(health, k = 2.002844) + s(edu, k = 2.002385) + s(hdi, k = 8.603228), data = pisa)
+par(mfrow = c(2, 3))
+plot(modelogam1, se = TRUE, col = 'green', residuals = TRUE, pch = 1, lwd = 2)
+```
+
+
+
+
+Podemos observar que las variables interest, support y health podrian tener un comporatimiento lineal entonces, voy a crear nuevos modelos con estas variables como lineales para chequear y testear cual de estos modelos GAM funciona mejor para explicar el comportamiento de las variables.
+
+```{r otros, warning=FALSE}
+modelogam2 <- gam(overall ~ interest + support + s(income, k = 4.244952) + health + s(edu, k = 2.002385) + s(hdi, k = 8.603228), data = pisa)
+modelogam3 <- gam(overall ~ s(interest, k = 4.750171) + support + s(income, k = 4.244952) + health + s(edu, k = 2.002385) + s(hdi, k = 8.603228), data = pisa)
+
+anova(modelogam1, modelogam2, modelogam3, test = 'F')
+```
+
+
+It seems like that addition of a linear interest, support and health components is much better than a GAM with them as a non-linear function because the p-value of 0.01191 tell us that is significant.
+```{r check, warning= FALSE}
+# Checking de los modelos
+gam.check(modelogam1)  #el modelo con el primer gam 
+gam.check(modelogam2)  #el segundo modelo con las variables interest, support y health como lineales.
+gam.check(modelogam3)  #tercer modelo gam dejando interest como no lineal
+```
+
+
+```{r}
+summary(modelogam2) 
+```
+
+Haciendo un summary al modelo con mejor significancia podemos observar que, dentro de los coeficientes parametricos, el unico que tiene real significancia es interest. Por lo tanto, en un analisis posterior, utilizando la funcion de lasso o elastic net podriamos corroborar si es conveniente o no, eliminar estas variables del modelo para predecir datos futuros. 
+
+Por otro lado, los smooth terms son es solo significativa la variable ingresos por lo tanto, deberiamos realizar la regularizacion por el modelo lasso y elastic net para corroborar si es conveniente o no, eliminar esas variables con el fin de buscar el modelo mas significativo para predecir los valores de la variable overall
+
+
